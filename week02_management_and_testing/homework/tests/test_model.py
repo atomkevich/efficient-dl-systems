@@ -39,10 +39,26 @@ def test_unet(input_tensor, num_timesteps):
 
 def test_diffusion(num_channels=3, batch_size=4):
     # note: you should not need to change the thresholds or the hyperparameters
-    net = UnetModel(num_channels, num_channels, hidden_size=128)
+        # Make the test deterministic across CPU/GPU
+    import random
+    import numpy as np
+    torch.manual_seed(0)
+    random.seed(0)
+    np.random.seed(0)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(0)
+    try:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    except Exception:
+        pass
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    net = UnetModel(num_channels, num_channels, hidden_size=128).to(device)
     model = DiffusionModel(eps_model=net, betas=(1e-4, 0.02), num_timesteps=20)
 
-    input_data = torch.randn((batch_size, num_channels, 32, 32))
+    input_data = torch.randn((batch_size, num_channels, 32, 32)).to(device)
 
     output = model(input_data)
     assert output.ndim == 0
