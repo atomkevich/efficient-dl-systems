@@ -130,3 +130,10 @@ dmypy.json
 
 .idea
 .DS_Store
+
+# Project specific
+data/
+cifar10/
+wandb/
+outputs/
+multirun/
