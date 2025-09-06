@@ -1,0 +1,16 @@
+# @package _global_
+# SGD configuration with high momentum and learning rate
+training:
+  epochs: 50
+  batch_size: 256
+  num_workers: 4
+  use_random_flip: true  # enable augmentations for better generalization
+
+optimizer:
+  name: sgd
+  lr: 5e-4  # higher learning rate for SGD
+  momentum: 0.99  # high momentum for stable training
+  weight_decay: 1e-4
+
+wandb:
+  name: "sgd-momentum"

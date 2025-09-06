@@ -1,0 +1,15 @@
+# @package _global_
+# Default Adam configuration with moderate learning rate
+training:
+  epochs: 50
+  batch_size: 128
+  num_workers: 4
+  use_random_flip: false
+
+optimizer:
+  name: adam
+  lr: 1e-4
+  weight_decay: 1e-5
+
+wandb:
+  name: "adam-default"
