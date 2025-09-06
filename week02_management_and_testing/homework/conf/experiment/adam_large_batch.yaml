@@ -1,0 +1,15 @@
+# @package _global_
+# Adam with large batch size and augmentations
+training:
+  epochs: 50
+  batch_size: 512
+  num_workers: 8  # increased workers for larger batch
+  use_random_flip: true
+
+optimizer:
+  name: adam
+  lr: 2e-4  # increased for larger batch
+  weight_decay: 1e-4
+
+wandb:
+  name: "adam-large-batch"

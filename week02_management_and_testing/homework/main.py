@@ -1,117 +1,120 @@
+import os
+from typing import Dict, Any
+
+import hydra
+from hydra.core.config_store import ConfigStore
+from omegaconf import DictConfig, OmegaConf
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torchvision.datasets import CIFAR10
 import wandb
-import argparse
-from dataclasses import asdict
 
 from modeling.diffusion import DiffusionModel
 from modeling.training import generate_samples, train_epoch
 from modeling.unet import UnetModel
-from config import get_config
 
 
-def main(device: str, config_override: dict = None):
-    config = get_config()
-    
-    # Override config if provided
-    if config_override:
-        for key, value in config_override.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
+@hydra.main(version_base=None, config_path="conf", config_name="config")
+def main(cfg: DictConfig) -> None:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
     
     # Initialize W&B
     wandb.init(
-        project=config.project_name,
-        name=config.run_name,
-        config=asdict(config)
+        project=cfg.wandb.project,
+        group=cfg.wandb.group,
+        name=cfg.wandb.name,
+        config=OmegaConf.to_container(cfg, resolve=True)
     )
     
     # Create model
     ddpm = DiffusionModel(
-        eps_model=UnetModel(config.image_channels, config.image_channels, hidden_size=config.unet_hidden_size),
-        betas=(config.beta_1, config.beta_2),
-        num_timesteps=config.num_timesteps,
+        eps_model=UnetModel(
+            cfg.model.image_channels,
+            cfg.model.image_channels,
+            hidden_size=cfg.model.hidden_size
+        ),
+        betas=(cfg.model.beta_1, cfg.model.beta_2),
+        num_timesteps=cfg.model.num_timesteps,
     )
     ddpm.to(device)
     
     # Log model architecture
-    wandb.watch(ddpm, log_freq=100, log_graph=True)
+    wandb.watch(ddpm, log_freq=100)
     
     # Data preparation
-    train_transforms = transforms.Compose([
-        transforms.ToTensor(), 
+    transforms_list = [
+        transforms.ToTensor(),
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    ])
+    ]
+    if cfg.training.use_random_flip:
+        transforms_list.insert(1, transforms.RandomHorizontalFlip())
+    
+    train_transforms = transforms.Compose(transforms_list)
 
     dataset = CIFAR10(
-        config.dataset_path,
+        root="data",
         train=True,
         download=True,
         transform=train_transforms,
     )
 
     dataloader = DataLoader(
-        dataset, 
-        batch_size=config.batch_size, 
-        num_workers=config.num_workers, 
+        dataset,
+        batch_size=cfg.training.batch_size,
+        num_workers=cfg.training.num_workers,
         shuffle=True
     )
     
-    # Optimizer with learning rate scheduling
-    optim = torch.optim.Adam(ddpm.parameters(), lr=config.learning_rate)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=config.num_epochs)
+    # Create optimizer
+    if cfg.optimizer.name.lower() == "adam":
+        optimizer = torch.optim.Adam(
+            ddpm.parameters(),
+            lr=cfg.optimizer.lr,
+            weight_decay=cfg.optimizer.weight_decay
+        )
+    elif cfg.optimizer.name.lower() == "sgd":
+        optimizer = torch.optim.SGD(
+            ddpm.parameters(),
+            lr=cfg.optimizer.lr,
+            momentum=cfg.optimizer.momentum,
+            weight_decay=cfg.optimizer.weight_decay
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer: {cfg.optimizer.name}")
+    
+    # Log config as artifact
+    config_path = os.path.join(hydra.utils.get_original_cwd(), "conf/experiment", f"{cfg.experiment}.yaml")
+    artifact = wandb.Artifact("experiment_config", type="config")
+    artifact.add_file(config_path)
+    wandb.log_artifact(artifact)
     
     # Training loop
-    for epoch in range(config.num_epochs):
+    for epoch in range(cfg.training.epochs):
         # Train one epoch
-        avg_loss = train_epoch(
-            ddpm, 
-            dataloader, 
-            optim, 
-            device, 
-            epoch, 
-            log_input_batch=(epoch == 0)  # Log input batch only in first epoch
-        )
+        avg_loss = train_epoch(ddpm, dataloader, optimizer, device)
         
         # Log metrics
-        current_lr = optim.param_groups[0]['lr']
-        wandb.log({
+        metrics = {
             "epoch": epoch,
             "train_loss": avg_loss,
-            "learning_rate": current_lr
-        }, step=epoch)
+            "learning_rate": optimizer.param_groups[0]["lr"],
+            "batch_size": cfg.training.batch_size,
+            "optimizer": cfg.optimizer.name,
+        }
+        wandb.log(metrics, step=epoch)
         
-        # Generate and log samples
-        generate_samples(ddpm, config, device, epoch)
+        # Generate and log samples every 10 epochs
+        if epoch % 10 == 0:
+            samples_path = f"samples_epoch_{epoch}.png"
+            generate_samples(ddpm, device, samples_path)
+            wandb.log({"samples": wandb.Image(samples_path)}, step=epoch)
         
-        # Update learning rate
-        scheduler.step()
-        
-        print(f"Epoch {epoch}: Loss = {avg_loss:.4f}, LR = {current_lr:.2e}")
+        print(f"Epoch {epoch}: Loss = {avg_loss:.4f}, LR = {cfg.optimizer.lr:.2e}")
     
     wandb.finish()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train DDPM on CIFAR-10")
-    parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
-    parser.add_argument("--batch-size", type=int, default=128, help="Batch size")
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
-    parser.add_argument("--run-name", type=str, default="ddpm-baseline", help="W&B run name")
-    
-    args = parser.parse_args()
-    
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
-    
-    # Override config with command line args
-    config_override = {
-        "num_epochs": args.epochs,
-        "batch_size": args.batch_size,
-        "learning_rate": args.lr,
-        "run_name": args.run_name
-    }
-    
-    main(device=device, config_override=config_override)
+    main()

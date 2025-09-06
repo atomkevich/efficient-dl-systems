@@ -1,0 +1,33 @@
+defaults:
+  - _self_
+  - experiment: adam_default
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+model:
+  image_channels: 3
+  hidden_size: 128
+  beta_1: 1e-4
+  beta_2: 0.02
+  num_timesteps: 1000
+
+training:
+  epochs: 50  # reduced from 100 for faster experimentation
+  batch_size: 128
+  num_workers: 4
+  use_random_flip: false
+
+optimizer:
+  name: adam  # or sgd
+  lr: 1e-4
+  momentum: 0.9  # used only for SGD
+  weight_decay: 1e-5
+
+wandb:
+  project: "ddpm-training"
+  group: "hydra-experiments"
