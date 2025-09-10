@@ -132,9 +132,9 @@ class UltraDuperBigBrainDataset(BigBrainDataset):
         # добавим длины
         self.lengths: List[int] = [ids.size(0) for (_, ids) in self.samples]
 
-    def __getitem__(self, idx: int) -> Tuple[str, torch.Tensor, int]:
+    def __getitem__(self, idx: int) -> Tuple[str, torch.Tensor]:
         raw, ids = self.samples[idx]
-        return raw, ids, ids.size(0)
+        return raw, ids
 
 def collate_fn(
     batch: List[Tuple[str, torch.Tensor]], max_length: Optional[int] = MAX_LENGTH
@@ -147,6 +147,33 @@ def collate_fn(
              где targets — next-token (сдвиг на 1), последний токен строки = PAD (0)
     """
     seqs = [ids for (_, ids) in batch]
+    raw_max = max(s.size(0) for s in seqs)
+    L = min(raw_max, max_length)
+    B = len(seqs)
+
+    inputs = torch.zeros((B, L), dtype=torch.long)
+    targets = torch.full((B, L), fill_value=-100, dtype=torch.long)
+
+    for i, s in enumerate(seqs):
+        n = min(s.size(0), L)
+        inputs[i, :n] = s[:n]
+        if n > 1:
+            targets[i, :n-1] = s[1:n]
+
+    # [B, L] -> [L, B]
+    return inputs.transpose(0, 1), targets.transpose(0, 1)
+
+def collate_fn_ultra(
+    batch: List[Tuple[str, torch.Tensor, int]], max_length: Optional[int] = MAX_LENGTH
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Pad each sequence of the incoming sequences list
+    :param batch: list of (raw_text, ids_tensor, length)
+    :param max_length: максимум длины (для Brain); здесь ограничивает верхнюю границу L
+    :return: (inputs, targets) формы [B, L],
+             где targets — next-token (сдвиг на 1), последний токен строки = PAD (0)
+    """
+    seqs = [ids for (_, ids, _) in batch]
     raw_max = max(s.size(0) for s in seqs)
     L = min(raw_max, max_length)
     B = len(seqs)
