@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from transformer import TransformerModel
-from dataset import collate_fn
+from dataset import collate_fn, collate_fn_ultra
 
 # Configure logging
 log_dir = Path("logs")
@@ -23,8 +23,11 @@ logging.basicConfig(
     ]
 )
 class CollateWrapper:
-    def __init__(self, max_length): self.max_length = max_length
-    def __call__(self, batch): return collate_fn(batch, self.max_length)
+    def __init__(self, max_length): 
+        self.max_length = max_length
+        
+    def __call__(self, batch): 
+        return collate_fn(batch, self.max_length)
 
 class DataMode(Enum):
     BRAIN = 1
@@ -103,9 +106,8 @@ def run_epoch(data_mode: DataMode) -> None:
         dataset = UltraDuperBigBrainDataset(data_path, max_length=max_length)
         dataloader = DataLoader(
             dataset,
-            batch_size=batch_size,
             num_workers=4,
-            sampler=UltraDuperBigBrainBatchSampler(dataset.lengths, batch_size),
+            batch_sampler=UltraDuperBigBrainBatchSampler(dataset, batch_size, k=10),  # k=10 - разница длин в батче
             collate_fn=CollateWrapper(max_length)
         )
     model = get_gpt2_model(vocab_size=dataset.vocab_size).to(device)
