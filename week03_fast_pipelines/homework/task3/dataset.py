@@ -1,7 +1,5 @@
 import os
 import typing as tp
-import zipfile
-import gdown
 
 from PIL import Image
 from torch.utils.data import Dataset
@@ -32,20 +30,18 @@ class ClothesDataset(Dataset):
 
 
 def download_extract_dataset():
-    if os.path.exists(f"{Clothes.directory}/{Clothes.train_val_img_dir}"):
-        print("Dataset already extracted")
-        return
-    os.makedirs(Clothes.directory, exist_ok=True)
-    gdown.download(
-        "https://drive.google.com/uc?id=19QYn7wX9kbBOUT3ofztgRURNR_8WLPj6",
-        output=f"{Clothes.directory}/{Clothes.archive_name}.zip",
-    )
-    gdown.download(
-        "https://drive.google.com/uc?id=1rk8CFX-0MdezDue_dSl6pGHzAtFrJefm",
-        output=f"{Clothes.directory}/{Clothes.csv_name}",
-    )
-    with zipfile.ZipFile(f"{Clothes.directory}/{Clothes.archive_name}.zip") as train_zip:
-        train_zip.extractall(f"{Clothes.directory}/{Clothes.train_val_img_dir}")
+    """Check if dataset exists in data directory"""
+    if not os.path.exists(f"{Clothes.directory}/{Clothes.train_val_img_dir}"):
+        raise FileNotFoundError(
+            f"Dataset not found in {Clothes.directory}/{Clothes.train_val_img_dir}. "
+            "Please place the dataset files in the data directory."
+        )
+    if not os.path.exists(f"{Clothes.directory}/{Clothes.csv_name}"):
+        raise FileNotFoundError(
+            f"CSV file not found in {Clothes.directory}/{Clothes.csv_name}. "
+            "Please place the csv file in the data directory."
+        )
+    print("Dataset found in data directory")
 
 
 def get_train_transforms() -> tp.Any:
