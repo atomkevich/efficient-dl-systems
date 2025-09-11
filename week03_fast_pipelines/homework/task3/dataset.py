@@ -14,19 +14,21 @@ class ClothesDataset(Dataset):
         self.transform = transform
         self.frame = frame.set_index("image")
         self.img_list = list(self.frame.index.values)
-
         self.label2ix = get_labels_dict()
+        
+        # Предварительно вычисляем пути к файлам и метки
+        self.img_paths = [f"{self.folder_path}/{img_name}.jpg" for img_name in self.img_list]
+        self.labels = [self.label2ix[self.frame.loc[img_name]["label"]] for img_name in self.img_list]
 
     def __len__(self):
         return len(self.img_list)
 
     def __getitem__(self, idx):
-        img_name = self.img_list[idx]
-        img = Image.open(f"{self.folder_path}/{img_name}.jpg").convert("RGB")
-        img_transformed = self.transform(img)
-        label = self.label2ix[self.frame.loc[img_name]["label"]]
-
-        return img_transformed, label
+        # Используем предварительно вычисленные значения
+        img = Image.open(self.img_paths[idx]).convert("RGB")
+        if self.transform:
+            img = self.transform(img)
+        return img, self.labels[idx]
 
 
 def download_extract_dataset():
@@ -47,12 +49,12 @@ def download_extract_dataset():
 def get_train_transforms() -> tp.Any:
     return transforms.Compose(
         [
-            transforms.Resize((320, 320)),
-            transforms.CenterCrop(224),
-            transforms.RandomResizedCrop(224),
+            transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),  # Объединяем resize и crop
             transforms.RandomHorizontalFlip(),
-            transforms.AugMix(),
+            transforms.AugMix(severity=3, mixture_width=3),  # Оптимизируем параметры AugMix
             transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],  # Добавляем нормализацию
+                              std=[0.229, 0.224, 0.225]),
         ]
     )
 
@@ -60,8 +62,10 @@ def get_train_transforms() -> tp.Any:
 def get_val_transforms() -> tp.Any:
     return transforms.Compose(
         [
-            transforms.Resize((320, 320)),
+            transforms.Resize(256),  # Меньше изменений размера
             transforms.CenterCrop(224),
             transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],  # Та же нормализация
+                              std=[0.229, 0.224, 0.225]),
         ]
     )
