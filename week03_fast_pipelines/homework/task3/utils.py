@@ -31,8 +31,8 @@ class Settings:
 
 
 class Clothes:
-    directory = "data"
-    train_val_img_dir = "train"
+    directory = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+    train_val_img_dir = "images_original"
     csv_name = "images.csv"
     archive_name = "images_original"
 
