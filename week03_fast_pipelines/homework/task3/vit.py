@@ -54,23 +54,22 @@ class Attention(nn.Module):
 
     def forward(self, x):
         B, N, C = x.shape
-        
         # Единая QKV проекция с оптимизированным reshape
         qkv = self.qkv(x)
         qkv = qkv.reshape(B, N, 3, self.heads, self.dim_head).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
-        
+
         # Оптимизированное вычисление attention scores с fused операцией
         dots = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        
-        # Оптимизированный softmax с inplace операцией
-        attn = F.softmax(dots, dim=-1, inplace=True)
+
+        # Softmax без inplace
+        attn = F.softmax(dots, dim=-1)
         attn = self.dropout(attn)
-        
+
         # Оптимизированное вычисление выхода с предварительным reshape
         out = torch.matmul(attn, v)
         out = out.transpose(1, 2).reshape(B, N, -1)
-        
+
         out = self.to_out(out)
         return self.norm(out)
 
