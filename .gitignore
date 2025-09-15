@@ -139,3 +139,4 @@ cifar10/
 wandb/
 outputs/
 multirun/
+profiler_logs/
