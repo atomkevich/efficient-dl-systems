@@ -50,8 +50,7 @@ class Net(nn.Module):
         x = self.bn1(x)
         x = F.relu(x)
         x = self.dropout2(x)
-        output = self.fc2(x)
-        return output
+        return self.fc2(x)
 
 
 def average_gradients(model):
@@ -61,49 +60,116 @@ def average_gradients(model):
         param.grad.data /= size
 
 
+def validate(model, val_loader, device, rank, world_size):
+    """Распределенная валидация с агрегацией метрик."""
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+    
+    with torch.no_grad():
+        for data, target in val_loader:
+            data = data.to(device)
+            target = target.to(device)
+            
+            output = model(data)
+            total_loss += F.cross_entropy(output, target, reduction='sum').item()
+            pred = output.argmax(dim=1)
+            correct += pred.eq(target).sum().item()
+            total += target.size(0)
+    
+    # Собираем метрики со всех процессов
+    metrics = torch.tensor([total_loss, correct, total], dtype=torch.float64, device=device)
+    dist.all_reduce(metrics, op=dist.ReduceOp.SUM)
+    
+    val_loss = metrics[0] / metrics[2]
+    val_acc = metrics[1] / metrics[2]
+    
+    return val_loss, val_acc
+
 def run_training(rank, size):
     torch.manual_seed(0)
-
-    dataset = CIFAR100(
+    
+    # Создаем train и val датасеты
+    train_dataset = CIFAR100(
         "./cifar",
-        transform=transforms.Compose(
-            [
-                transforms.ToTensor(),
-                transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
-            ]
-        ),
+        train=True,
+        transform=transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        ]),
         download=True,
     )
-    # where's the validation dataset?
-    loader = DataLoader(dataset, sampler=DistributedSampler(dataset, size, rank), batch_size=64)
+    
+    val_dataset = CIFAR100(
+        "./cifar",
+        train=False,
+        transform=transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        ]),
+        download=True,
+    )
+    
+    # Создаем распределенные загрузчики данных
+    train_sampler = DistributedSampler(train_dataset, size, rank)
+    train_loader = DataLoader(train_dataset, sampler=train_sampler, batch_size=64)
+    
+    val_sampler = DistributedSampler(val_dataset, size, rank, shuffle=False)
+    val_loader = DataLoader(val_dataset, sampler=val_sampler, batch_size=64)
 
     model = Net()
-    device = torch.device("cpu")  # replace with "cuda" afterwards
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
+    
+    # Заменяем BatchNorm на SyncBatchNorm
+    from syncbn import SyncBatchNorm
+    model = SyncBatchNorm.convert_sync_batchnorm(model)
+    
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
 
-    num_batches = len(loader)
+    for epoch in range(10):
+        model.train()
+        train_sampler.set_epoch(epoch)  # Важно для правильной перемешивания данных
+        epoch_loss = torch.zeros(1, device=device)
+        running_acc = 0.0
+        num_samples = 0
 
-    for _ in range(10):
-        epoch_loss = torch.zeros((1,), device=device)
-
-        for data, target in loader:
+        for batch_idx, (data, target) in enumerate(train_loader):
             data = data.to(device)
             target = target.to(device)
 
             optimizer.zero_grad()
             output = model(data)
-            loss = torch.nn.functional.cross_entropy(output, target)
+            loss = F.cross_entropy(output, target)
             epoch_loss += loss.detach()
             loss.backward()
             average_gradients(model)
             optimizer.step()
 
-            acc = (output.argmax(dim=1) == target).float().mean()
+            pred = output.argmax(dim=1)
+            acc = pred.eq(target).sum().item()
+            running_acc += acc
+            num_samples += target.size(0)
 
-            print(f"Rank {dist.get_rank()}, loss: {epoch_loss / num_batches}, acc: {acc}")
-            epoch_loss = 0
-        # where's the validation loop?
+            # Логгируем только с процесса ранга 0
+            if rank == 0 and batch_idx % 10 == 0:
+                print(f"Train Epoch: {epoch} [{batch_idx * len(data)}/{len(train_loader.dataset)} "
+                      f"({100. * batch_idx / len(train_loader):.0f}%)]\t"
+                      f"Loss: {loss.item():.6f}\t"
+                      f"Acc: {running_acc/num_samples:.4f}")
+
+        # Валидация в конце каждой эпохи
+        val_loss, val_acc = validate(model, val_loader, device, rank, size)
+        
+        # Логгируем результаты эпохи только с процесса ранга 0
+        if rank == 0:
+            print(f"Epoch: {epoch}, Val loss: {val_loss:.4f}, Val accuracy: {val_acc:.4f}")
+        
+        scheduler.step()
 
 
 if __name__ == "__main__":

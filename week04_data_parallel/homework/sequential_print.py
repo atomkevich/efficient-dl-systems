@@ -19,11 +19,23 @@ def run_sequential(rank, size, num_iter=10):
     ```
     """
 
-    pass
+    for _ in range(num_iter):
+        for r in range(size):
+            if rank == r:
+                print(f"Process {rank}", flush=True)
+            dist.barrier()
+    
+            
 
 
 if __name__ == "__main__":
-    local_rank = int(os.environ["LOCAL_RANK"])
-    dist.init_process_group(rank=local_rank, backend="gloo")
+    local_rank = int(os.environ["LOCAL_RANK"])          # 0..nproc-1
+    dist.init_process_group(backend="gloo")             # init_method="env://" по умолчанию
 
-    run_sequential(local_rank, dist.get_world_size())
+    # Можно брать rank/size из dist (надёжнее), а не из env:
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    run_sequential(rank, world_size, num_iter=2)
+
+    dist.destroy_process_group()

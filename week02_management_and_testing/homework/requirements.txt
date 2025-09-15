@@ -6,3 +6,5 @@ pytest-cov==4.1.0
 wandb==0.16.1
 hydra-core==1.3.2
 omegaconf>=2.3.0
+dvc>=3.0.0
+dvc[gdrive]  # для хранения данных на Google Drive

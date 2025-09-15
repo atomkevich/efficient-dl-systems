@@ -1,0 +1,67 @@
+schema: '2.0'
+stages:
+  prepare_data:
+    cmd: python prepare_data.py
+    deps:
+    - path: prepare_data.py
+      hash: md5
+      md5: ea3fbc2a3b2288aeb873769763b94a59
+      size: 457
+    outs:
+    - path: data/cifar-10-batches-py
+      hash: md5
+      md5: 2c2c368a819f1df18fd0afa1c052c6c4.dir
+      size: 186214114
+      nfiles: 8
+  train:
+    cmd: python main.py experiment=adam_default
+    deps:
+    - path: conf/config.yaml
+      hash: md5
+      md5: c38ce5d15f306b1983ad316dc232e4fe
+      size: 771
+    - path: conf/experiment/adam_default.yaml
+      hash: md5
+      md5: 8323c831de0de4af623382d70683694a
+      size: 247
+    - path: main.py
+      hash: md5
+      md5: e3045e396e848a4d78d2d61f91203204
+      size: 5761
+    - path: modeling/
+      hash: md5
+      md5: 73439b6de7456aebbd8f917b82f10e44.dir
+      size: 32955
+      nfiles: 12
+    params:
+      conf/config.yaml:
+        model:
+          image_channels: 3
+          hidden_size: 128
+          beta_1: 0.0001
+          beta_2: 0.02
+          num_timesteps: 1000
+        optimizer:
+          name: adam
+          lr: 0.0001
+          momentum: 0.9
+          weight_decay: 1e-05
+        training:
+          epochs: 50
+          batch_size: 128
+          num_workers: 4
+          use_random_flip: false
+    outs:
+    - path: metrics.json
+      hash: md5
+      md5: 9207c8237f7acd18bdab51a1b408eded
+      size: 161
+    - path: metrics/adam_default.json
+      hash: md5
+      md5: 9207c8237f7acd18bdab51a1b408eded
+      size: 161
+    - path: outputs
+      hash: md5
+      md5: b7cdbf6311c04fd484fada98344f79a4.dir
+      size: 3953
+      nfiles: 4

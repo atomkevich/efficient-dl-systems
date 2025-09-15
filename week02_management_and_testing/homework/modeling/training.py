@@ -32,7 +32,7 @@ def train_epoch(model: DiffusionModel, dataloader: DataLoader, optimizer: Optimi
         total_loss += train_loss.item()
         num_batches += 1
         
-        pbar.set_description(f"loss: {loss_ema:.4f}")
+        pbar.set_description(f"[Epoch {epoch}] loss: {loss_ema:.4f}")
         
         # Log input batch only once per epoch and only for first batch
         if log_input_batch and batch_idx == 0:

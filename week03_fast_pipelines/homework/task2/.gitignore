@@ -1,0 +1,28 @@
+# Dataset files
+.data/
+wikitext-103/
+*.zip
+*.tar.gz
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.env/
+.venv/
+venv/
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# VS Code
+.vscode/
+
+# PyTorch
+*.pth
+*.pt
+
+# Logs
+*.log

@@ -1,0 +1,15 @@
+# @package _global_
+# SGD configuration with momentum
+training:
+  epochs: 100  # больше эпох для SGD
+  batch_size: 64  # меньший батч для лучшей сходимости
+  use_random_flip: true  # включаем аугментацию
+
+optimizer:
+  name: sgd
+  lr: 0.1  # более высокий learning rate для SGD
+  momentum: 0.9
+  weight_decay: 1e-4
+
+wandb:
+  name: "sgd-momentum"

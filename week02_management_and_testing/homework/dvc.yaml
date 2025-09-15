@@ -1,0 +1,30 @@
+vars:
+  - experiment: adam_default  # default experiment
+
+stages:
+  prepare_data:
+    cmd: python prepare_data.py
+    deps:
+      - prepare_data.py
+    outs:
+      - data/cifar-10-batches-py
+      
+  train:
+    cmd: python main.py experiment=${experiment}
+    deps:
+      - main.py
+      - modeling/
+      - conf/config.yaml
+      - conf/experiment/${experiment}.yaml
+    params:
+      - conf/config.yaml:
+          - model
+          - training
+          - optimizer
+    outs:
+      - outputs
+    metrics:
+      - metrics.json:
+          cache: false
+      - metrics/${experiment}.json:
+          cache: false

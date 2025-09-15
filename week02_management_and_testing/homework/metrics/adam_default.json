@@ -1,0 +1,8 @@
+{
+  "final_loss": 0.07738991240825495,
+  "best_loss": 0.07738991240825495,
+  "epochs": 1,
+  "batch_size": 128,
+  "optimizer": "adam",
+  "learning_rate": 0.0001
+}

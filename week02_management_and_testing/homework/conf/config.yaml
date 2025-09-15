@@ -22,6 +22,13 @@ training:
   num_workers: 4
   use_random_flip: false
 
+sampling:
+  num_samples: 8
+  image_size: 32
+  sample_grid_nrow: 4
+  samples_dir: "samples"
+  save_every_n_epochs: 10  # как часто сохранять семплы
+
 optimizer:
   name: adam  # or sgd
   lr: 1e-4
