@@ -19,14 +19,27 @@ class sync_batch_norm(Function):
 
     @staticmethod
     def forward(ctx, input, running_mean, running_std, eps: float, momentum: float):
-        # Вычисляем статистики для текущего процесса
+        # Определяем размерности входа
         batch_size = input.size(0)
-        channel_size = input.size(1)
-        spatial_size = input.numel() // (batch_size * channel_size)
+        channel_size = input.size(1) if input.dim() > 1 else input.size(0)
         
-        # Вычисляем среднее и variance для текущего процесса
-        local_sum = input.sum(dim=[0, 2, 3]) if input.dim() == 4 else input.sum(dim=0)
-        local_square_sum = (input ** 2).sum(dim=[0, 2, 3]) if input.dim() == 4 else (input ** 2).sum(dim=0)
+        # Определяем размерности для суммирования в зависимости от размерности входа
+        if input.dim() == 2:  # (N, C)
+            sum_dims = [0]
+            spatial_size = 1
+            mean_shape = (1, -1)
+        elif input.dim() == 3:  # (N, C, L)
+            sum_dims = [0, 2]
+            spatial_size = input.size(2)
+            mean_shape = (-1, 1, 1)
+        else:  # (N, C, H, W)
+            sum_dims = [0, 2, 3]
+            spatial_size = input.size(2) * input.size(3)
+            mean_shape = (1, -1, 1, 1)
+            
+        # Вычисляем статистики для текущего процесса
+        local_sum = input.sum(dim=sum_dims)
+        local_square_sum = (input ** 2).sum(dim=sum_dims)
         local_count = batch_size * spatial_size
         
         # Собираем статистики со всех процессов используя один коллективный вызов
@@ -48,9 +61,18 @@ class sync_batch_norm(Function):
             running_std.mul_(1 - momentum).add_(global_std * momentum)
         
         # Нормализуем input
-        normalized = (input - global_mean.view(-1, 1, 1) if input.dim() == 3 
-                     else global_mean.view(1, -1, 1, 1)) / (global_std.view(-1, 1, 1) 
-                     if input.dim() == 3 else global_std.view(1, -1, 1, 1))
+        # Применяем правильные размерности для нормализации
+        if input.dim() == 2:  # (N, C)
+            mean_view = global_mean.view(1, -1)
+            std_view = global_std.view(1, -1)
+        elif input.dim() == 3:  # (N, C, L)
+            mean_view = global_mean.view(-1, 1, 1)
+            std_view = global_std.view(-1, 1, 1)
+        else:  # (N, C, H, W)
+            mean_view = global_mean.view(1, -1, 1, 1)
+            std_view = global_std.view(1, -1, 1, 1)
+            
+        normalized = (input - mean_view) / std_view
         
         # Сохраняем для backward pass
         ctx.save_for_backward(input, global_mean, global_std)
@@ -65,35 +87,43 @@ class sync_batch_norm(Function):
         batch_size = ctx.batch_size
         spatial_size = ctx.spatial_size
         
-        # Настраиваем размерности в зависимости от входных данных
-        is_4d = input.dim() == 4
-        mean_shape = (1, -1, 1, 1) if is_4d else (-1, 1, 1)
-        reduce_dims = [0, 2, 3] if is_4d else [0]
+        # Определяем размерности в зависимости от входных данных
+        if input.dim() == 2:  # (N, C)
+            reduce_dims = [0]
+            mean_shape = (1, -1)
+        elif input.dim() == 3:  # (N, C, L)
+            reduce_dims = [0, 2]
+            mean_shape = (-1, 1, 1)
+        else:  # (N, C, H, W)
+            reduce_dims = [0, 2, 3]
+            mean_shape = (1, -1, 1, 1)
         
-        # Градиенты для нормализованного входа
+        # Подготавливаем mean и std для broadcast
         mean_view = mean.view(*mean_shape)
         std_view = std.view(*mean_shape)
         
-        # Базовый градиент
+        # Базовый градиент через std
         grad_input = grad_output / std_view
         
         # Вычисляем локальные градиенты
-        local_grad_mean = grad_output.sum(dim=reduce_dims)
-        local_grad_std = (grad_output * (input - mean_view)).sum(dim=reduce_dims)
+        grad_output_sum = grad_output.sum(dim=reduce_dims)  # [C]
+        dot_prod = ((input - mean_view) * grad_output).sum(dim=reduce_dims)  # [C]
         
-        # Собираем градиенты со всех процессов (один вызов all_reduce)
-        stats = torch.stack([local_grad_mean, local_grad_std])
-        dist.all_reduce(stats, op=dist.ReduceOp.SUM)
-        grad_mean, grad_std = stats
+        # Собираем градиенты в единый тензор для синхронизации
+        combined_grad = torch.stack([grad_output_sum, dot_prod])  # [2, C]
+        
+        # Синхронизируем градиенты между процессами
+        dist.all_reduce(combined_grad, op=dist.ReduceOp.SUM)
         
         # Нормализуем на общее количество элементов
         total_count = batch_size * spatial_size * dist.get_world_size()
         
-        # Собираем финальный градиент
-        grad_mean_term = grad_mean.view(*mean_shape) / total_count
-        grad_std_term = (input - mean_view) * grad_std.view(*mean_shape) / (total_count * std_view)
+        # Применяем градиенты с правильными размерностями
+        grad_mean = combined_grad[0].view(*mean_shape) / total_count
+        grad_std = combined_grad[1].view(*mean_shape) / (total_count * std_view)
         
-        grad_input = grad_input - grad_mean_term - grad_std_term
+        # Собираем финальный градиент
+        grad_input = grad_input - grad_mean - (input - mean_view) * grad_std
         
         # None для остальных входных параметров forward (running_mean, running_std, eps, momentum)
         return grad_input, None, None, None, None
@@ -115,8 +145,9 @@ class SyncBatchNorm(_BatchNorm):
             device=None,
             dtype=None,
         )
-        self.running_mean = torch.zeros(num_features)
-        self.running_std = torch.ones(num_features)
+        # Регистрируем буферы чтобы они автоматически перемещались на нужное устройство
+        self.register_buffer('running_mean', torch.zeros(num_features))
+        self.register_buffer('running_std', torch.ones(num_features))
         
         # Проверяем инициализацию distributed
         if not dist.is_available():
@@ -130,16 +161,21 @@ class SyncBatchNorm(_BatchNorm):
             input = input.contiguous()
             
         if not self.training and self.track_running_stats:
+            if input.dim() == 4:          # N,C,H,W
+                mean_view = self.running_mean.view(1, -1, 1, 1)
+                std_view  = self.running_std.view(1, -1, 1, 1)
+            elif input.dim() == 3:         # N,C,L
+                mean_view = self.running_mean.view(1, -1, 1)
+                std_view  = self.running_std.view(1, -1, 1)
+            elif input.dim() == 2:         # N,C  (BatchNorm1d после FC)
+                mean_view = self.running_mean.view(1, -1)
+                std_view  = self.running_std.view(1, -1)
+            else:
+                raise ValueError(f"Unsupported input.dim() = {input.dim()}")
+
+            normalized = (input - mean_view) / std_view
             # Используем running статистики в режиме eval
-            return (
-                input - self.running_mean.view(-1, 1, 1)
-                if input.dim() == 3
-                else self.running_mean.view(1, -1, 1, 1)
-            ) / (
-                self.running_std.view(-1, 1, 1)
-                if input.dim() == 3
-                else self.running_std.view(1, -1, 1, 1)
-            )
+            return normalized
 
         return sync_batch_norm.apply(
             input, 
@@ -156,15 +192,21 @@ class SyncBatchNorm(_BatchNorm):
         Similar to torch.nn.SyncBatchNorm.convert_sync_batchnorm but for our implementation.
         """
         module_output = module
+        
         if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+            # Создаем новый SyncBatchNorm
             module_output = SyncBatchNorm(
                 module.num_features,
                 module.eps,
                 module.momentum,
             )
+            # Копируем статистики из оригинального BatchNorm
             if module.track_running_stats:
-                module_output.running_mean = module.running_mean
-                module_output.running_std = module.running_var.sqrt()
+                with torch.no_grad():
+                    module_output.running_mean.copy_(module.running_mean)
+                    module_output.running_std.copy_(module.running_var.sqrt())
+            # Копируем устройство
+            module_output.to(module.weight.device if module.weight is not None else module.running_mean.device)
                 
         for name, child in module.named_children():
             module_output.add_module(

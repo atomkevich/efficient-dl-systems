@@ -53,11 +53,13 @@ class Net(nn.Module):
         return self.fc2(x)
 
 
-def average_gradients(model):
+def sync_gradients(model):
+    """Synchronize gradients across all processes."""
     size = float(dist.get_world_size())
     for param in model.parameters():
-        dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
-        param.grad.data /= size
+        if param.grad is not None:
+            dist.all_reduce(param.grad.data, op=dist.ReduceOp.SUM)
+            param.grad.data /= size
 
 
 def validate(model, val_loader, device, rank, world_size):
@@ -87,7 +89,15 @@ def validate(model, val_loader, device, rank, world_size):
     
     return val_loss, val_acc
 
-def run_training(rank, size):
+def run_training(rank, size, use_pytorch_ddp=False):
+    """
+    Run distributed training with either custom or PyTorch DDP implementation
+    
+    Args:
+        rank: Process rank
+        size: World size (total number of processes)
+        use_pytorch_ddp: If True, use PyTorch's DistributedDataParallel, otherwise use custom implementation
+    """
     torch.manual_seed(0)
     
     # Создаем train и val датасеты
@@ -124,12 +134,24 @@ def run_training(rank, size):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
     
-    # Заменяем BatchNorm на SyncBatchNorm
-    from syncbn import SyncBatchNorm
-    model = SyncBatchNorm.convert_sync_batchnorm(model)
+    # Выбираем реализацию DDP
+    if use_pytorch_ddp:
+        from torch.nn.parallel import DistributedDataParallel as DDP
+        # На CPU не используем SyncBatchNorm от PyTorch
+        if torch.cuda.is_available():
+            model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model = DDP(model)
+    else:
+        # Используем нашу реализацию SyncBatchNorm, которая работает и на CPU
+        from syncbn import SyncBatchNorm
+        model = SyncBatchNorm.convert_sync_batchnorm(model)
     
     optimizer = torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10)
+
+    # Gradient accumulation settings
+    accumulation_steps = 4  # Number of batches to accumulate gradients
+    optimizer.zero_grad()
 
     for epoch in range(10):
         model.train()
@@ -142,13 +164,22 @@ def run_training(rank, size):
             data = data.to(device)
             target = target.to(device)
 
-            optimizer.zero_grad()
+            # Forward pass and loss computation
             output = model(data)
             loss = F.cross_entropy(output, target)
-            epoch_loss += loss.detach()
+            epoch_loss += loss.detach()  # Сохраняем оригинальное значение loss для статистики
+            # Scale loss for gradient accumulation
+            loss = loss / accumulation_steps
+            
+            # Backward pass
             loss.backward()
-            average_gradients(model)
-            optimizer.step()
+
+            # Update weights only after accumulating enough gradients
+            if (batch_idx + 1) % accumulation_steps == 0:
+                # Synchronize gradients only when we're about to update
+                sync_gradients(model)
+                optimizer.step()
+                optimizer.zero_grad()
 
             pred = output.argmax(dim=1)
             acc = pred.eq(target).sum().item()
@@ -169,9 +200,15 @@ def run_training(rank, size):
         if rank == 0:
             print(f"Epoch: {epoch}, Val loss: {val_loss:.4f}, Val accuracy: {val_acc:.4f}")
         
+        # Handle remaining gradients at the end of epoch
+        if len(train_loader) % accumulation_steps != 0:
+            sync_gradients(model)
+            optimizer.step()
+            optimizer.zero_grad()
+            
         scheduler.step()
 
 
 if __name__ == "__main__":
     local_rank = int(os.environ["LOCAL_RANK"])
-    init_process(local_rank, fn=run_training, backend="gloo")  # replace with "nccl" when testing on several GPUs
+    init_process(local_rank, fn=run_training, backend="gloo")  # use "nccl" for GPU
