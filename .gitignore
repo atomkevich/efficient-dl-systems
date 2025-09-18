@@ -140,3 +140,4 @@ wandb/
 outputs/
 multirun/
 profiler_logs/
+cifar/
